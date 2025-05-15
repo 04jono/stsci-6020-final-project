@@ -1,0 +1,353 @@
+---
+title: "World Energy Consumption STSCI 6020 Final Project"
+author: "Jonathan Chen"
+date: "2025-05-14"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load dataset
+
+```{r}
+energy_data <- read.csv("dataset/world_energy_consumption.csv")
+```
+
+## Exploratory data analysis
+
+First, explore the labels of the dataset.
+
+```{r}
+summary(energy_data)
+
+```
+
+```{r}
+#install.packages("psych",dependencies=TRUE)
+library(psych)
+describe(energy_data)
+```
+
+Only keep a few columns to investigate.
+
+```{r}
+energy_subset <- energy_data[, c("population", "year", "gdp","coal_consumption", "coal_production", "coal_share_energy", "electricity_demand", "electricity_share_energy", "gas_consumption", "gas_production", "greenhouse_gas_emissions", "nuclear_consumption", "oil_consumption")]
+```
+
+## First exploration
+
+Looking at the distribution of electricity demand:
+
+```{r}
+energy_2016 <- energy_subset[energy_subset$year %in% c("2016"), ]
+
+energy_elec_gdp <- energy_2016[, c("gdp", "population", "electricity_demand")]
+
+energy_elec_gdp <- na.omit(energy_elec_gdp)
+
+
+hist(energy_elec_gdp$electricity_demand, breaks = 100, xlim = c(0, 5000))
+
+```
+
+Over all countries in 2016, is electricity demand linearly related to GDP and Population?
+
+```{r}
+
+# Dataset cleaning
+
+energy_elec_gdp <- na.omit(energy_elec_gdp)
+
+# The data includes outliers of countries with very high GDP (i.e. USA) and also aggregate data (Whole world). These data points tend to skew the distribution of GDP. Let's remove these outliers based on 1.5 * IQR
+
+Q1 <- quantile(energy_elec_gdp$gdp, 0.25, na.rm = TRUE)
+Q3 <- quantile(energy_elec_gdp$gdp, 0.75, na.rm = TRUE)
+
+IQR <- Q3 - Q1
+
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+energy_elec_gdp <- energy_elec_gdp[energy_elec_gdp$gdp >= lower_bound & energy_elec_gdp$gdp <= upper_bound, ]
+
+
+```
+
+```{r}
+# Fit the model
+elec_gdp_model <- lm(electricity_demand ~ gdp + population, data=energy_elec_gdp)
+
+summary(elec_gdp_model)
+```
+## Linearity assessment
+
+```{r}
+plot(elec_gdp_model$fitted.values, elec_gdp_model$residuals, main = "Fitted vs. Residuals", 
+     xlab = "Fitted Values", ylab = "Residuals", col = "blue")
+
+```
+This plot shows that the data fits the first assumption of linearity, as the residuals fall roughly around 0.
+This plot shows that the data does not fit the assumption of homoscedasticity. It is clear that the residuals increase in variance as the fitted values increase, forming a funnel shape.
+
+```{r}
+qqnorm(elec_gdp_model$residuals)
+
+```
+The QQ plot shows that the residuals are not normally distributed, as compared to the quantiles of a normal distribution the data does not follow the same quantiles.
+
+
+```{r}
+library(lmtest)
+dwtest(elec_gdp_model)
+
+```
+The Durbin-Watson test result of 2 tells us that the residuals are not autocorrelated, and thus the data does not violate the assumption of independent errors.
+
+## Log Transformation 
+As the initial data violated some of the assumptions of linear regression, we can perform some transformations to mitigate these violations. As the variance seems to be proportional to the expected value, we should try a log-log model.
+
+```{r}
+log_elec_gdp_model <- lm(log(electricity_demand) ~ log(gdp) + log(population), data=energy_elec_gdp)
+
+summary(log_elec_gdp_model)
+
+```
+```{r}
+log_elec_gdp_model <- lm(log(electricity_demand) ~ log(gdp) + log(population), data=energy_elec_gdp)
+
+summary(log_elec_gdp_model)
+
+```
+```{r}
+plot(log_elec_gdp_model$fitted.values, log_elec_gdp_model$residuals, main = "Fitted vs. Residuals", 
+     xlab = "Fitted Values", ylab = "Residuals", col = "blue")
+```
+```{r}
+qqnorm(log_elec_gdp_model$residuals)
+
+```
+```{r}
+dwtest(log_elec_gdp_model)
+
+```
+```{r}
+vif(log_elec_gdp_model)
+```
+
+The new plots, particularly the Fitted vs. Residuals and QQ Plot, show that the log-transformed GDP, population, and electricity consumption fit the assumptions of linear regression. The Variance Inflation Factor also shows that the independent variables are not multicollinear.
+
+## Variable selection
+
+We want to explore the factors that influence greenhouse gas emissions for a country.
+
+We will use two methods of variable selection: branch and bound and forward stepwise. 
+
+```{r}
+
+energy_2016_clean <- na.omit(energy_2016)
+
+model_data <- model.matrix(greenhouse_gas_emissions ~ ., data = energy_2016_clean)[, -1]
+
+response <- energy_2016_clean$greenhouse_gas_emissions
+
+model_data <- model.matrix(greenhouse_gas_emissions ~ ., data = energy_2016_clean)[, -1]
+
+
+#install.packages("leaps",dependencies=TRUE)
+
+library(leaps)
+
+# Branch and bound
+best_subset <- regsubsets(x = model_data, y = response, 
+                          nvmax = 5, method = "seqrep")
+
+summary_best <- summary(best_subset)
+
+summary_best$which
+```
+```{r}
+# Forward stepwise with AIC
+
+# From Lab 9:
+## smallest model to consider
+intOnly <- lm(greenhouse_gas_emissions~ 1, data = energy_2016_clean)
+## largest model to consider
+mod <- lm(greenhouse_gas_emissions ~ ., data = energy_2016_clean)
+# Step actually considers the negative AIC, so you would pick the one with the smallest AIC
+# object is the model to start with (in this case only an intercept)
+# direction specifies whether it should be forward, or backward
+# scope determines the largest model we would consider
+# Trace tells whether or not to print out each step
+# k = 2 uses aic, k = log(n) uses bic
+out_forward_aic <- step(object = intOnly, direction = "forward",
+scope = formula(mod), trace = T, k = 2)
+
+
+```
+```{r}
+summary(out_forward_aic)
+```
+The two variable selection algorithms determine that oil consumption, coal consumption, and gas production are the variables that are most significant in predicting greenhouse gas emissions. Interestingly, GDP is less significant of a factor.
+
+```{r}
+
+# Clean data
+energy_2016_greenhouse <- energy_2016[, c("greenhouse_gas_emissions", "oil_consumption", "coal_consumption", "gas_consumption")]
+
+energy_2016_greenhouse <- na.omit(energy_2016_greenhouse)
+
+Q1 <- quantile(energy_2016_greenhouse$greenhouse_gas_emissions, 0.25, na.rm = TRUE)
+Q3 <- quantile(energy_2016_greenhouse$greenhouse_gas_emissions, 0.75, na.rm = TRUE)
+
+IQR <- Q3 - Q1
+
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+energy_2016_greenhouse <- energy_2016_greenhouse[energy_2016_greenhouse$greenhouse_gas_emissions >= lower_bound & energy_2016_greenhouse$greenhouse_gas_emissions <= upper_bound, ]
+
+
+greenhouse_model <- lm(greenhouse_gas_emissions ~ oil_consumption + coal_consumption + gas_consumption, data = energy_2016_greenhouse)
+
+summary(greenhouse_model)
+
+```
+## Linearity assessment on Greenhouse Gas emissions
+
+```{r}
+plot(greenhouse_model$fitted.values, greenhouse_model$residuals, main = "Fitted vs. Residuals", 
+     xlab = "Fitted Values", ylab = "Residuals", col = "blue")
+
+```
+Like our initial data exploration on GDP and electricity demand, the variance of errors between greenhouse gases and oil/coal/gas consumption/production also seems to be heteroscedastic, where variance is increasing proportional to fitted values. Let's try a log-log model.
+
+```{r}
+
+# Adding 1 for values of 0 in consumption/production
+
+log_greenhouse_model <- lm(log(greenhouse_gas_emissions) ~ log(oil_consumption + 1) + log(coal_consumption + 1) + log(gas_consumption + 1), data = energy_2016_greenhouse)
+
+summary(log_greenhouse_model)
+
+```
+
+```{r}
+plot(log_greenhouse_model$fitted.values, log_greenhouse_model$residuals, main = "Fitted vs. Residuals", 
+     xlab = "Fitted Values", ylab = "Residuals", col = "blue")
+
+
+```
+
+
+```{r}
+qqnorm(log_greenhouse_model$residuals)
+
+```
+
+
+```{r}
+library(lmtest)
+dwtest(log_greenhouse_model)
+
+```
+
+```{r}
+#install.packages("car", dependencies = TRUE)
+library(car)
+vif_values <- vif(log_greenhouse_model)
+vif_values
+```
+
+```{r}
+summary(log_greenhouse_model)$r.squared
+```
+```{r}
+summary(log_greenhouse_model)$adj.r.squared
+```
+The new plots and tests show that the log-log model is approximately linear, has constant variance and normally distributed errors, as well as independent residuals. The variance inflation factor shows that there is little multicollinearity between the independent variables, or more precisely that they are in an acceptable range (less than 5). This verifies that the log-log model meets the assumptions of linear regression.
+
+From the summary plot, we have performed a hypothesis test on oil consumption, coal consumption, and gas consumption. As all have a very small p-value, we can conclude that each of oil consumption, gas consumption, and coal consumption have a statistically significant correlation with greenhouse gas emissions. The R-squared value of 0.84 indicates that the model explains a good amount of the data.
+
+The interpretation of the coefficients is interesting. It shows that, holding all variables constant, two countries with 1% difference in oil consumption are expected to have a 0.43% difference in greenhouse emissions, while two countries with a 1% difference in coal consumption are expected to have a 0.29% difference in greenhouse emissions. This difference is likely due to a global trend in reducing coal consumption in favor of oil and gas consumption. Thus, a percent change in coal consumption is a relatively smaller absolute change in consumption compared to other modes of energy.
+
+```{r}
+confint(log_greenhouse_model, level = 0.95)
+```
+The confidence intervals shows that if we repeated the data collection process for energy consumption, we would be 95% of the estimated effects would lie between 0.226 and 0.634 for oil consumption. The other two confidence intervals are also reported. This shows that there is high confidence in a positive association between greenhouse gas emissions and oil/gas/coal consumption.
+
+```{r}
+#install.packages("Metrics",dependencies=TRUE)
+library(Metrics)
+
+pred <- predict(log_greenhouse_model, newdata = energy_2016_greenhouse)
+
+rmse(actual = energy_2016_greenhouse$greenhouse_gas_emissions, predicted = exp(pred))
+
+mean(energy_2016_greenhouse$greenhouse_gas_emissions)
+
+
+```
+The RMSE is very high though compared to the mean of greenhouse gas emissions, indicating that our model has a poor predictive ability on our original data. This likely may be overall due to significant variance in the cleaned dataset, as restricting it to the year of 2016 only allows for a number of data points capped by the number of countries in the world, and excluding outliers and data-deficient rows there are even fewer data points.
+
+
+## Continued exploration
+
+Let's see if models have changed between 2016 and 2021 and 2000.
+
+```{r}
+energy_2021 <- energy_subset[energy_subset$year %in% c("2021"), ]
+
+energy_2021_greenhouse <- energy_2021[, c("greenhouse_gas_emissions", "oil_consumption", "coal_consumption", "gas_consumption")]
+
+energy_2021_greenhouse <- na.omit(energy_2021_greenhouse)
+
+Q1 <- quantile(energy_2021_greenhouse$greenhouse_gas_emissions, 0.25, na.rm = TRUE)
+Q3 <- quantile(energy_2021_greenhouse$greenhouse_gas_emissions, 0.75, na.rm = TRUE)
+
+IQR <- Q3 - Q1
+
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+energy_2021_greenhouse <- energy_2021_greenhouse[energy_2021_greenhouse$greenhouse_gas_emissions >= lower_bound & energy_2021_greenhouse$greenhouse_gas_emissions <= upper_bound, ]
+
+
+greenhouse_model_2021 <- lm(log(greenhouse_gas_emissions) ~ log(oil_consumption + 1) + log(coal_consumption + 1) + log(gas_consumption + 1), data = energy_2021_greenhouse)
+
+summary(greenhouse_model_2021)
+
+```
+While small, there seems to be an increase in the coefficient for oil and a greater increase in the coefficient for gas, and a decrease in coefficient for coal. This is expected as coal use has continued to decline.
+
+
+```{r}
+energy_2000 <- energy_subset[energy_subset$year %in% c("2000"), ]
+
+energy_2000_greenhouse <- energy_2000[, c("greenhouse_gas_emissions", "oil_consumption", "coal_consumption", "gas_consumption")]
+
+energy_2000_greenhouse <- na.omit(energy_2000_greenhouse)
+
+Q1 <- quantile(energy_2000_greenhouse$greenhouse_gas_emissions, 0.25, na.rm = TRUE)
+Q3 <- quantile(energy_2000_greenhouse$greenhouse_gas_emissions, 0.75, na.rm = TRUE)
+
+IQR <- Q3 - Q1
+
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+energy_2000_greenhouse <- energy_2000_greenhouse[energy_2000_greenhouse$greenhouse_gas_emissions >= lower_bound & energy_2000_greenhouse$greenhouse_gas_emissions <= upper_bound, ]
+
+
+greenhouse_model_2000 <- lm(log(greenhouse_gas_emissions) ~ log(oil_consumption + 1) + log(coal_consumption + 1) + log(gas_consumption + 1), data = energy_2000_greenhouse)
+
+summary(greenhouse_model_2000)
+
+```
+In 2000, oil and coal consumption are much more significant contributors than gas consumption.
+
+```{r}
+
+
+```
